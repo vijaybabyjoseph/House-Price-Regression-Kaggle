@@ -1,0 +1,525 @@
+---
+title: "House Price Regression"
+author: "Vijay Baby Joseph"
+date: "26 July 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+
+#rm(list=ls())
+
+#library(knitr)
+library(dplyr)
+library(randomForest)
+library(caret)
+library(adabag)
+library(e1071)
+library(pROC)
+library(ROCR)
+library(class)
+library(readr)
+library(data.table)
+
+set.seed(100)
+
+train=fread("C:/Users/Administrator/Desktop/DataScience/house regression/train.csv",stringsAsFactors = F)
+
+test=fread("C:/Users/Administrator/Desktop/DataScience/house regression/test.csv",stringsAsFactors = F)
+
+
+#View(head(train,10))
+
+
+#head(id)
+#ncol(train)
+#ncol(test)
+#nrow(test)
+#nrow(train)
+
+#class(train)
+#str(train)
+
+train=as.data.frame(train)
+test=as.data.frame(test)
+
+```
+
+
+
+# Finding names of categorical variable
+
+```{r}
+category <- names(train)[which(sapply(train, is.character))]
+category
+numerical <- names(train)[which(sapply(train, is.numeric))]
+numerical
+
+category <- names(test)[which(sapply(test, is.character))]
+category
+
+numerical <- names(test)[which(sapply(test, is.numeric))]
+numerical
+
+#str(train)
+#lapply(train, class)
+#lapply(test, class)
+```
+
+
+#comments
+
+- this is Regression problem - predicting housing prices
+
+
+
+#na count
+
+```{r}
+
+############for train set
+
+#na percentage
+
+sapply(train, function(x) sum((is.na(x))/length(x)*100))
+
+
+# na count per col function
+sort(sapply(train, function(x) sum(length(which(is.na(x))))), decreasing = T)  
+
+
+
+
+# removing cols with too many nas
+
+train$PoolQC = NULL
+
+train$Alley = NULL
+
+train$MiscFeature = NULL
+
+train$Fence = NULL
+
+
+#############for test set
+
+#na percentage
+
+sapply(test, function(x) sum((is.na(x))/length(x)*100))
+
+
+# na count per col function
+sort(sapply(test, function(x) sum(length(which(is.na(x))))), decreasing = T)  
+
+
+
+# removing cols with too many nas
+
+test$PoolQC = NULL
+
+test$Alley = NULL
+
+test$MiscFeature = NULL
+
+test$Fence = NULL
+
+
+```
+
+
+
+#Correlation
+
+- 
+```{r}
+
+correlatiion_analysis= function(df){
+  num<-sapply(df, is.numeric)
+  numericalcols<-(df[,num])
+  cormat=cor(numericalcols)
+  corel=as.data.frame(as.table(cormat))
+  colnames(corel)<-c("Col 1","Col 2","Correlation")
+  final=corel%>%filter(Correlation>0.75&Correlation<1)%>%arrange(-Correlation)
+  final
+}
+
+correlatiion_analysis(train)
+
+
+correlatiion_analysis(test)
+
+# eliminating cols with correlation greater than 80
+
+train$GarageCars<-NULL
+
+train$TotRmsAbvGrd<-NULL
+
+train$GarageYrBlt<-NULL
+
+train$TotalBsmtSF<-NULL
+
+
+################################
+
+test$GarageCars<-NULL
+
+test$TotRmsAbvGrd<-NULL
+
+test$GarageYrBlt<-NULL
+
+test$TotalBsmtSF<-NULL
+
+
+```
+
+
+
+#imputing numerical cols using mice
+
+#train
+```{r}
+
+numeric <- names(train)[which(sapply(train, is.numeric))]
+
+num=train[numeric]
+num=num%>%select(-Id)
+head(num,10)
+
+
+library(mice)
+
+library(VIM)
+aggr_plot <- aggr(num, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(data), cex.axis=.7, gap=3, ylab=c("Histogram of missing data","Pattern"))
+
+
+imptrain <- mice(num, method='cart',printFlag=F)
+
+
+#checking how well numerocal col lot area imputed 
+xyplot(imptrain, LotFrontage ~ LotArea)
+
+#checking the distribution of imputed data
+densityplot(imptrain, ~LotFrontage)
+
+
+num <- complete(imptrain)
+
+sum(is.na(num))
+#head(num,10)
+
+
+
+```
+
+
+
+
+
+#test
+```{r}
+
+
+##################for test
+
+numeric <- names(test)[which(sapply(test, is.numeric))]
+
+numtest=test[numeric]
+numtest=numtest%>%select(-Id)
+#head(num,10)
+
+#na percentage
+
+sapply(numtest, function(x) sum((is.na(x))/length(x)*100))
+
+
+# na count per col function
+sort(sapply(numtest, function(x) sum(length(which(is.na(x))))),decreasing = T)  
+
+
+
+aggr_plot <- aggr(numtest, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(data), cex.axis=.7, gap=3, ylab=c("Histogram of missing data","Pattern"))
+
+
+imptest <- mice(numtest, method='cart',printFlag=F)
+
+
+#checking how well numerocal col lot area imputed 
+xyplot(imptest, LotFrontage ~ LotArea)
+
+#checking the distribution of imputed data
+densityplot(imptest, ~LotFrontage)
+
+
+numtest <- complete(imptest)
+```
+
+
+#Na of factors seperation of train into datatrain and data test
+```{r}
+#train na
+facttrain <- names(train)[which(sapply(train, is.character))]
+ftrain=train[facttrain]
+ftrain[is.na(ftrain)] <- "None"
+ftrain<-lapply(ftrain, factor)
+ftrain<-as.data.frame(ftrain)
+#head(ftrain,10)
+
+
+#test na
+facttest<- names(test)[which(sapply(test, is.character))]
+ftest=test[facttest]
+ftest[is.na(ftest)] <- "None"
+ftest<-lapply(ftest, factor)
+ftest<-as.data.frame(ftest)
+#head(ftest,10)
+
+train=cbind(ftrain,num)
+
+test = cbind(ftest,numtest)
+
+# seperation of train into datatrain and datatest
+datatrain = train[1:(0.7*nrow(train)),]
+datatest = train[(0.7*nrow(train)+1):nrow(train),]
+
+#nrow(datatrain)
+
+```
+
+
+
+
+
+################################################################################################################################################################################################################################
+
+#LINEAR
+#using dummyvars to convert categorical into numerical for linear and xgboost
+
+```{r}
+#datatrain
+# convert categ col to numerical
+
+categtrain <- names(datatrain)[which(sapply(datatrain, is.factor))]
+cattrain=datatrain[categtrain]
+
+dummy_obj=dummyVars(~., data=cattrain)# creates a full set of dummy variables
+d_new=data.frame(predict(dummy_obj,newdata = cattrain))
+d_new[is.na(d_new)] <- 0  #for any level that was NA, set to zero
+
+#normalising
+library(BBmisc)
+
+
+#datatest
+categtest <- names(datatest)[which(sapply(datatest, is.factor))]
+cattest=datatest[categtest]
+#convert categ col to numerical
+dummy_obj=dummyVars(~., data=cattest)# creates a full set of dummy variables
+d_new=data.frame(predict(dummy_obj,newdata = cattest))
+d_new[is.na(d_new)] <- 0  #for any level that was NA, set to zero
+# normalising
+
+
+
+#reconstruct
+
+numtra <- names(datatrain)[which(sapply(datatrain, is.numeric))]
+numdtrain=datatrain[numtra]
+
+numtes <- names(datatest)[which(sapply(datatest, is.numeric))]
+numdtest=datatest[numtes]
+
+numdtrain=normalize(numdtrain,method='range', range=c(0,1))
+numdtest=normalize(numdtest,method='range', range=c(0,1))
+#Linear Regression
+
+#Load Train and Test datasets
+
+
+
+linetrain <- cbind(dummytrain,numdtrain)
+linetest <- cbind(dummytest,numdtest)
+
+
+# Train the model 
+ln<- lm(SalePrice~., data = linetrain)
+
+
+#Predict Output
+
+predicted = predict(ln,linetest) 
+
+predicted = as.data.frame(predicted)
+
+
+#View(head(predicted,10))
+
+#id = datatest%>%select(Id)
+#lineresult = cbind(id,predicted)
+#colnames(lineresult) = c("Id","SalePrice")
+
+#View(head(result,10))
+
+# summary
+#summary(ln)
+
+#RMSE
+#linetest$SalePrice=as.numeric(linetest$SalePrice)
+#lineresult$SalePrice=as.numeric(lineresult$SalePrice)
+head(predicted)
+
+
+rmse <- function(x,y){
+    a <- sqrt(sum((log(x)-log(y))^2)/length(y))
+    return(a)
+}
+
+ss=predicted[predicted<0]
+ss
+rmse(linetest$SalePrice,predicted$predicted)
+
+categtest
+```
+
+ 
+
+#Random forest
+
+```{r}
+
+# categorical cols 
+
+cattra <- names(datatrain)[which(sapply(datatrain, is.factor))]
+cattrain=datatrain[cattra]
+
+cattes <- names(datatest)[which(sapply(datatest, is.factor))]
+cattest=datatest[cattes]
+
+#sapply(rftrain,class)
+
+#Load Train and Test datasets
+
+#sum(is.na(datatrain))
+rftrain <- cbind(cattrain,numtrain)
+rftest <- cbind(cattest,numtest)
+
+names(rftrain) <- make.names(names(rftrain))
+names(rftest) <- make.names(names(rftest))
+
+
+# Fitting model
+rf <- randomForest(SalePrice~., data=rftrain)
+
+
+#Predict Output 
+predicted= predict(rf,rftest)
+
+id = datatest%>%select(Id)
+result = cbind(id,predicted)
+head(result,10)
+
+
+#RMSE
+datatest$SalePrice = as.numeric(datatest$SalePrice)
+result$predicted = as.numeric(result$predicted)
+
+
+rmsee(datatest$SalePrice,result$predicted)
+
+
+```
+
+
+```{r}
+
+#install.packages("gbm")# gradient boosting
+
+```
+
+
+#XGboost
+
+```{r}
+
+library(xgboost)
+
+
+# categ <- names(train)[which(sapply(train, is.character))]
+# cat=train[categ]
+# 
+# cat[is.na(cat)] <- "None"  #for any level that was NA, set to zero
+
+
+
+xg_train = datatrain 
+xg_test = datatest
+
+
+
+xgboost_model<- xgboost(data=data.matrix(xg_train%>%select(-SalePrice)),label = as.numeric(xg_train$SalePrice),eta = 0.07, max_depth=8,  nround=40, print_every_n = 10, subsample = 0.5, colsample_bytree = 0.5, eval_metric = "rmse", objective ="reg:linear", nthread = 3)
+
+predicted<- predict(xgboost_model,data.matrix(xg_test%>%select(-SalePrice)))
+
+
+
+result1=as.data.frame(cbind(xg_test$Id,predicted))
+colnames(result1) = c("id","predicted")
+head(result1,10)
+
+#RMSE
+xg_test$SalePrice = as.numeric(xg_test$SalePrice)
+result1$predicted = as.numeric(result1$predicted)
+
+
+error=sqrt(sum(xg_test$SalePrice-result1$predicted)^2/nrow(result1))
+rmse_xg<- error/(max(xg_test$SalePrice)-min(xg_test$SalePrice))
+rmse_lm
+rmse_xg
+
+
+
+
+
+```
+
+
+
+
+
+# FINAL RESULT usign XG-Boost
+
+- xg_boost gives the best result so using it on the test set
+```{r}
+
+
+finalfull=cbind(numtest,testdnorm)
+
+finalpred = predict(xgboost_model,data.matrix(full)) 
+
+class(finalpred)
+
+result =as.data.frame(test$Id, finalpred)
+
+nrow(result)
+
+View(head(finalpred,10))
+
+write.csv(result, file = "sub.csv")
+#getwd()
+
+
+colnames(full) %in% colnames(finalfull) 
+
+ncol(full)
+
+colnames(full)
+```
+
+-more logical imputation by going 
+
+
+
